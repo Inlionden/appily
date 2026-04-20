@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">appily</string>
+    <string name="title_activity_main">appily</string>
+    <string name="package_name">com.example.appiliy</string>
+    <string name="custom_url_scheme">com.example.appiliy</string>
+</resources>
