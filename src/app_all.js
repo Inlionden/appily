@@ -4,7 +4,6 @@ import GroqTest from "./GroqTest";
 import BillScanner from "./BillScanner";
 import SupabaseTest from "./SupabaseTest";
 import VoiceInput from "./VoiceInput";
-import SensorTest from "./sensors/SensorTest";
 
 
 const tabs = [
@@ -57,7 +56,6 @@ export default function App() {
       {active === "bill" && <BillScanner />}
       {active === "supabase" && <SupabaseTest />}
       {active === "voice" && <VoiceInput />}
-      {active === "sensors" && <SensorTest />}
     </div>
   );
 }
