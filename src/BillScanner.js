@@ -17,8 +17,13 @@ export default function BillScanner() {
     setPhase("camera");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" }, // rear camera on mobile
-      });
+        video: {
+            facingMode: "environment",
+            width: { ideal: 3840 },
+            height: { ideal: 2160 },
+            aspectRatio: { ideal: 1.7777 },
+        },
+        });
       videoRef.current.srcObject = stream;
       videoRef.current.play();
     } catch (err) {
@@ -245,10 +250,11 @@ const styles = {
     flexDirection: "column",
   },
   video: {
-    width: "100%",
-    borderRadius: 10,
-    background: "#000",
-  },
+  width: "100%",
+  borderRadius: 10,
+  background: "#000",
+  objectFit: "cover",
+},
   statusBox: {
     textAlign: "center",
     padding: 30,
