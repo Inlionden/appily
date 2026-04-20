@@ -23,51 +23,6 @@ const MODES = [
   { id: "doc",  label: "Doc Scan", color: "#378ADD" },
 ];
 
-const Card = ({ title, color, children }) => (
-  <div style={{
-    border: "2px solid " + color,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
-    background: "#f8f9ff",
-  }}>
-    <div style={{
-      fontSize: 11,
-      fontWeight: "bold",
-      color: color,
-      letterSpacing: 1,
-      textTransform: "uppercase",
-      marginBottom: 10,
-    }}>
-      {title}
-    </div>
-    {children}
-  </div>
-);
-
-const Btn = ({ onClick, active, color, children, disabled }) => {
-  const c = color || "#1a237e";
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        flex: 1,
-        padding: "11px 8px",
-        fontSize: 13,
-        fontWeight: "bold",
-        background: disabled ? "#eee" : active ? c : "#e8eaf6",
-        color: disabled ? "#aaa" : active ? "#fff" : c,
-        border: "1px solid " + (disabled ? "#ccc" : c),
-        borderRadius: 8,
-        cursor: disabled ? "not-allowed" : "pointer",
-      }}
-    >
-      {children}
-    </button>
-  );
-};
-
 function getSortedExpressions(expressions) {
   var entries = Object.entries(expressions);
   entries.sort(function(a, b) {
@@ -78,21 +33,94 @@ function getSortedExpressions(expressions) {
   return entries.slice(0, 4);
 }
 
-export default function VisionTest() {
-  const videoRef    = useRef(null);
-  const canvasRef   = useRef(null);
-  const streamRef   = useRef(null);
-  const stopLoopRef = useRef(null);
+function Card(props) {
+  return (
+    <div style={{
+      border: "2px solid " + props.color,
+      borderRadius: 12,
+      padding: 14,
+      marginBottom: 14,
+      background: "#f8f9ff",
+    }}>
+      <div style={{
+        fontSize: 11,
+        fontWeight: "bold",
+        color: props.color,
+        letterSpacing: 1,
+        textTransform: "uppercase",
+        marginBottom: 10,
+      }}>
+        {props.title}
+      </div>
+      {props.children}
+    </div>
+  );
+}
 
-  const [mode, setMode]           = useState("ocr");
-  const [phase, setPhase]         = useState("idle");
-  const [preview, setPreview]     = useState(null);
-  const [result, setResult]       = useState(null);
-  const [error, setError]         = useState("");
-  const [loading, setLoading]     = useState("");
-  const [qrLive, setQrLive]       = useState(false);
-  const [faceReady, setFaceReady] = useState(false);
-  const [blurScore, setBlurScore] = useState(null);
+function Btn(props) {
+  var c = props.color || "#1a237e";
+  return (
+    <button
+      onClick={props.onClick}
+      disabled={props.disabled}
+      style={{
+        flex: 1,
+        padding: "11px 8px",
+        fontSize: 13,
+        fontWeight: "bold",
+        background: props.disabled ? "#eee" : props.active ? c : "#e8eaf6",
+        color: props.disabled ? "#aaa" : props.active ? "#fff" : c,
+        border: "1px solid " + (props.disabled ? "#ccc" : c),
+        borderRadius: 8,
+        cursor: props.disabled ? "not-allowed" : "pointer",
+      }}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+export default function VisionTest() {
+  var videoRef    = useRef(null);
+  var canvasRef   = useRef(null);
+  var streamRef   = useRef(null);
+  var stopLoopRef = useRef(null);
+
+  var modeState       = useState("ocr");
+  var mode            = modeState[0];
+  var setMode         = modeState[1];
+
+  var phaseState      = useState("idle");
+  var phase           = phaseState[0];
+  var setPhase        = phaseState[1];
+
+  var previewState    = useState(null);
+  var preview         = previewState[0];
+  var setPreview      = previewState[1];
+
+  var resultState     = useState(null);
+  var result          = resultState[0];
+  var setResult       = resultState[1];
+
+  var errorState      = useState("");
+  var error           = errorState[0];
+  var setError        = errorState[1];
+
+  var loadingState    = useState("");
+  var loading         = loadingState[0];
+  var setLoading      = loadingState[1];
+
+  var qrLiveState     = useState(false);
+  var qrLive          = qrLiveState[0];
+  var setQrLive       = qrLiveState[1];
+
+  var faceReadyState  = useState(false);
+  var faceReady       = faceReadyState[0];
+  var setFaceReady    = faceReadyState[1];
+
+  var blurState       = useState(null);
+  var blurScore       = blurState[0];
+  var setBlurScore    = blurState[1];
 
   useEffect(function() {
     loadFaceModels()
@@ -109,30 +137,38 @@ export default function VisionTest() {
     setResult(null);
     setPreview(null);
     setBlurScore(null);
-    openCamera(videoRef.current)
-      .then(function(stream) {
-        streamRef.current = stream;
-        setPhase("camera");
-        if (mode === "qr") {
-          setQrLive(true);
-          stopLoopRef.current = startQRScanLoop(
-            videoRef.current,
-            canvasRef.current,
-            function(data) {
-              stopCamera(streamRef.current);
-              if (stopLoopRef.current) stopLoopRef.current();
-              setQrLive(false);
-              setPreview(canvasToDataURL(canvasRef.current));
-              setResult({ type: "qr", data: data });
-              setPhase("done");
-            },
-            null
-          );
-        }
-      })
-      .catch(function(e) {
-        setError("Camera error: " + e.message);
-      });
+    setPhase("camera");
+    setTimeout(function() {
+      if (!videoRef.current) {
+        setError("Camera element not ready. Please try again.");
+        setPhase("idle");
+        return;
+      }
+      openCamera(videoRef.current)
+        .then(function(stream) {
+          streamRef.current = stream;
+          if (mode === "qr") {
+            setQrLive(true);
+            stopLoopRef.current = startQRScanLoop(
+              videoRef.current,
+              canvasRef.current,
+              function(data) {
+                stopCamera(streamRef.current);
+                if (stopLoopRef.current) stopLoopRef.current();
+                setQrLive(false);
+                setPreview(canvasToDataURL(canvasRef.current));
+                setResult({ type: "qr", data: data });
+                setPhase("done");
+              },
+              null
+            );
+          }
+        })
+        .catch(function(e) {
+          setError("Camera error: " + e.message);
+          setPhase("idle");
+        });
+    }, 100);
   }
 
   async function capture() {
@@ -210,12 +246,27 @@ export default function VisionTest() {
 
   return (
     <div style={{ maxWidth: 500, margin: "20px auto", padding: "0 16px", fontFamily: "sans-serif" }}>
+
+      <video
+        ref={videoRef}
+        playsInline
+        muted
+        style={{
+          width: "100%",
+          borderRadius: 10,
+          background: "#000",
+          display: phase === "camera" ? "block" : "none",
+          marginBottom: phase === "camera" ? 8 : 0,
+        }}
+      />
+      <canvas ref={canvasRef} style={{ display: "none" }} />
+
       <h2 style={{ color: "#1a237e", marginBottom: 4 }}>Vision Test</h2>
       <p style={{ color: "#888", fontSize: 13, marginBottom: 16 }}>
         Camera and AI vision tools
       </p>
 
-      {error && (
+      {error ? (
         <div style={{
           background: "#ffebee",
           border: "1px solid #ef9a9a",
@@ -227,7 +278,7 @@ export default function VisionTest() {
         }}>
           {error}
         </div>
-      )}
+      ) : null}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         {MODES.map(function(m) {
@@ -253,7 +304,7 @@ export default function VisionTest() {
         })}
       </div>
 
-      {phase === "idle" && mode === "ocr" && (
+      {phase === "idle" && mode === "ocr" ? (
         <Card title="OCR — Read text from image" color="#7F77DD">
           <p style={{ fontSize: 13, color: "#666", marginTop: 0, marginBottom: 12 }}>
             Point camera at any printed text, bill, or sign.
@@ -262,9 +313,9 @@ export default function VisionTest() {
             <Btn onClick={startCam} color="#7F77DD">Open Camera</Btn>
           </div>
         </Card>
-      )}
+      ) : null}
 
-      {phase === "idle" && mode === "qr" && (
+      {phase === "idle" && mode === "qr" ? (
         <Card title="QR / Barcode Scanner" color="#1D9E75">
           <p style={{ fontSize: 13, color: "#666", marginTop: 0, marginBottom: 12 }}>
             Live scan — automatically detects QR codes.
@@ -273,9 +324,9 @@ export default function VisionTest() {
             <Btn onClick={startCam} color="#1D9E75">Start Scanner</Btn>
           </div>
         </Card>
-      )}
+      ) : null}
 
-      {phase === "idle" && mode === "face" && (
+      {phase === "idle" && mode === "face" ? (
         <Card title="Face Detection" color="#D85A30">
           <p style={{ fontSize: 13, color: "#666", marginTop: 0, marginBottom: 8 }}>
             Detects faces and reads expressions.
@@ -289,9 +340,9 @@ export default function VisionTest() {
             </Btn>
           </div>
         </Card>
-      )}
+      ) : null}
 
-      {phase === "idle" && mode === "doc" && (
+      {phase === "idle" && mode === "doc" ? (
         <Card title="Document Scanner" color="#378ADD">
           <p style={{ fontSize: 13, color: "#666", marginTop: 0, marginBottom: 12 }}>
             Scans documents, applies filter and reads text.
@@ -300,17 +351,10 @@ export default function VisionTest() {
             <Btn onClick={startCam} color="#378ADD">Open Camera</Btn>
           </div>
         </Card>
-      )}
+      ) : null}
 
-      {phase === "camera" && (
+      {phase === "camera" ? (
         <div>
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            style={{ width: "100%", borderRadius: 10, background: "#000" }}
-          />
-          <canvas ref={canvasRef} style={{ display: "none" }} />
           {qrLive ? (
             <div>
               <div style={{
@@ -320,25 +364,25 @@ export default function VisionTest() {
                 fontSize: 13,
                 color: "#1D9E75",
                 fontWeight: "bold",
-                marginTop: 10,
                 textAlign: "center",
+                marginBottom: 8,
               }}>
                 Scanning... point at a QR code
               </div>
-              <div style={{ display: "flex", marginTop: 8 }}>
+              <div style={{ display: "flex" }}>
                 <Btn onClick={reset} color="#888">Cancel</Btn>
               </div>
             </div>
           ) : (
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <div style={{ display: "flex", gap: 8 }}>
               <Btn onClick={capture} active={true} color={currentMode.color}>Capture</Btn>
               <Btn onClick={reset} color="#888">Cancel</Btn>
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
-      {phase === "processing" && (
+      {phase === "processing" ? (
         <div style={{ textAlign: "center", padding: 20 }}>
           <div style={{
             width: 40,
@@ -350,19 +394,19 @@ export default function VisionTest() {
             margin: "0 auto 12px",
           }} />
           <p style={{ color: "#555", fontSize: 14 }}>{loading || "Processing..."}</p>
-          {preview && (
+          {preview ? (
             <img
               src={preview}
               alt="captured"
               style={{ width: "100%", borderRadius: 10, opacity: 0.5, marginTop: 10 }}
             />
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
-      {phase === "done" && result && (
+      {phase === "done" && result ? (
         <div>
-          {blurScore && (
+          {blurScore ? (
             <div style={{
               display: "inline-block",
               background: blurScore.blurry ? "#fff3e0" : "#e1f5ee",
@@ -377,9 +421,9 @@ export default function VisionTest() {
                 ? "Image may be blurry (score: " + blurScore.score + ")"
                 : "Image is sharp (score: " + blurScore.score + ")"}
             </div>
-          )}
+          ) : null}
 
-          {preview && (
+          {preview ? (
             <img
               src={preview}
               alt="result"
@@ -390,9 +434,9 @@ export default function VisionTest() {
                 marginBottom: 12,
               }}
             />
-          )}
+          ) : null}
 
-          {result.type === "ocr" && (
+          {result.type === "ocr" ? (
             <div style={{
               background: "#f0f4ff",
               border: "1px solid #c5cae9",
@@ -411,9 +455,9 @@ export default function VisionTest() {
                 <p style={{ color: "#aaa", fontSize: 13, margin: 0 }}>No text found. Try better lighting.</p>
               )}
             </div>
-          )}
+          ) : null}
 
-          {result.type === "qr" && (
+          {result.type === "qr" ? (
             <div style={{
               background: "#e1f5ee",
               border: "1px solid #1D9E75",
@@ -429,7 +473,7 @@ export default function VisionTest() {
                   <p style={{ fontSize: 15, fontWeight: "bold", color: "#333", margin: "0 0 10px" }}>
                     {result.data}
                   </p>
-                  {result.data.startsWith("http") && (
+                  {result.data.startsWith("http") ? (
                     <a
                       href={result.data}
                       target="_blank"
@@ -448,15 +492,15 @@ export default function VisionTest() {
                     >
                       Open Link
                     </a>
-                  )}
+                  ) : null}
                 </div>
               ) : (
                 <p style={{ color: "#aaa", fontSize: 13, margin: 0 }}>No QR code found. Try again.</p>
               )}
             </div>
-          )}
+          ) : null}
 
-          {result.type === "face" && (
+          {result.type === "face" ? (
             <div style={{
               background: "#fff3f0",
               border: "1px solid #D85A30",
@@ -483,17 +527,15 @@ export default function VisionTest() {
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
                           {sorted.map(function(item) {
-                            var expr = item[0];
-                            var val  = item[1];
                             return (
-                              <span key={expr} style={{
+                              <span key={item[0]} style={{
                                 background: "#ffe0d4",
                                 color: "#993C1D",
                                 fontSize: 11,
                                 padding: "2px 8px",
                                 borderRadius: 10,
                               }}>
-                                {expr}: {Math.round(val * 100)}%
+                                {item[0]}: {Math.round(item[1] * 100)}%
                               </span>
                             );
                           })}
@@ -504,9 +546,9 @@ export default function VisionTest() {
                 </div>
               )}
             </div>
-          )}
+          ) : null}
 
-          {result.type === "doc" && (
+          {result.type === "doc" ? (
             <div style={{
               background: "#e6f1fb",
               border: "1px solid #378ADD",
@@ -525,18 +567,15 @@ export default function VisionTest() {
                 <p style={{ color: "#aaa", fontSize: 13, margin: 0 }}>No text found.</p>
               )}
             </div>
-          )}
+          ) : null}
 
           <div style={{ display: "flex", gap: 8 }}>
             <Btn onClick={startCam} active={true} color={currentMode.color}>Try Again</Btn>
             <Btn onClick={reset} color="#888">Reset</Btn>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {phase !== "camera" && (
-        <canvas ref={canvasRef} style={{ display: "none" }} />
-      )}
     </div>
   );
 }

@@ -5,12 +5,13 @@ import BillScanner from "./BillScanner";
 import SupabaseTest from "./SupabaseTest";
 import VoiceInput from "./VoiceInput";
 import SensorTest from "./sensors/SensorTest";
-
+import VisionTest from "./vision/VisionTest";
 
 const tabs = [
   { id: "map",  label: "🗺️ Map"  },
   { id: "ai",   label: "🤖 AI"   },
   { id: "bill", label: "🧾 Bill" },
+  { id: "vision", label: "👁️ Vision" },
   { id: "supabase", label: "🗄️ Database" },
   { id: "voice", label: "🎙️ Voice" },
   { id: "sensors", label: "📡 Sensors" },
@@ -57,6 +58,7 @@ export default function App() {
       {active === "ai"   && <GroqTest />}
       {active === "bill" && <BillScanner />}
       {active === "supabase" && <SupabaseTest />}
+      {active === "vision" && <VisionTest />}
       {active === "voice" && <VoiceInput />}
       {active === "sensors" && <SensorTest />}
     </div>
