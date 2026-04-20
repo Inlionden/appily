@@ -1,7 +1,54 @@
+import { useState } from "react";
 import MapView from "./MapView";
+import GroqTest from "./GroqTest";
+import BillScanner from "./BillScanner";
 
-function App() {
-  return <MapView />;
+const tabs = [
+  { id: "map",  label: "🗺️ Map"  },
+  { id: "ai",   label: "🤖 AI"   },
+  { id: "bill", label: "🧾 Bill" },
+];
+
+export default function App() {
+  const [active, setActive] = useState("map");
+
+  return (
+    <div>
+      {/* Tab Bar */}
+      <div style={{
+        display: "flex",
+        justifyContent: "center",
+        gap: 8,
+        padding: "12px 16px",
+        background: "#1a237e",
+        position: "sticky",
+        top: 0,
+        zIndex: 1000,
+      }}>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setActive(t.id)}
+            style={{
+              padding: "10px 20px",
+              fontSize: 15,
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+              background: active === t.id ? "#fff" : "transparent",
+              color: active === t.id ? "#1a237e" : "#c5cae9",
+              fontWeight: active === t.id ? "bold" : "normal",
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      {active === "map"  && <MapView />}
+      {active === "ai"   && <GroqTest />}
+      {active === "bill" && <BillScanner />}
+    </div>
+  );
 }
-
-export default App;
