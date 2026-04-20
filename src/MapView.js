@@ -12,7 +12,7 @@ L.Icon.Default.mergeOptions({
 });
 
 export default function MapView() {
-  const [position, setPosition] = useState([17.385, 78.486]); // default location
+  const [position, setPosition] = useState([17.747723127519677, 83.26575345791245]); // default location
 
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(
