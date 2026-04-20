@@ -2,11 +2,13 @@ import { useState } from "react";
 import MapView from "./MapView";
 import GroqTest from "./GroqTest";
 import BillScanner from "./BillScanner";
+import SupabaseTest from "./SupabaseTest";
 
 const tabs = [
   { id: "map",  label: "🗺️ Map"  },
   { id: "ai",   label: "🤖 AI"   },
   { id: "bill", label: "🧾 Bill" },
+  { id: "supabase", label: "🗄️ Database" },
 ];
 
 export default function App() {
@@ -49,6 +51,7 @@ export default function App() {
       {active === "map"  && <MapView />}
       {active === "ai"   && <GroqTest />}
       {active === "bill" && <BillScanner />}
+      {active === "supabase" && <SupabaseTest />}
     </div>
   );
 }
