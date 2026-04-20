@@ -4,7 +4,8 @@ import Tesseract from "tesseract.js";
 export default function BillScanner() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const [phase, setPhase] = useState("idle"); // idle | camera | ocr | asking | done
+  const [phase, setPhase] = useState("idle"); // idle | camera | preview | ocr | asking | done
+  const [previewUrl, setPreviewUrl] = useState("");
   const [ocrText, setOcrText] = useState("");
   const [groqResult, setGroqResult] = useState("");
   const [error, setError] = useState("");
@@ -14,16 +15,17 @@ export default function BillScanner() {
     setError("");
     setOcrText("");
     setGroqResult("");
+    setPreviewUrl("");
     setPhase("camera");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-            facingMode: "environment",
-            width: { ideal: 3840 },
-            height: { ideal: 2160 },
-            aspectRatio: { ideal: 1.7777 },
+          facingMode: "environment",
+          width: { ideal: 3840 },
+          height: { ideal: 2160 },
+          aspectRatio: { ideal: 1.7777 },
         },
-        });
+      });
       videoRef.current.srcObject = stream;
       videoRef.current.play();
     } catch (err) {
@@ -32,7 +34,7 @@ export default function BillScanner() {
     }
   };
 
-  // ── 2. Capture Frame ────────────────────────────────────────────────────
+  // ── 2. Capture Frame → Preview ──────────────────────────────────────────
   const capturePhoto = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -42,19 +44,34 @@ export default function BillScanner() {
 
     // Stop camera stream
     video.srcObject.getTracks().forEach((t) => t.stop());
-    setPhase("ocr");
-    runOCR(canvas);
+
+    // Show preview
+    const url = canvas.toDataURL("image/jpeg", 0.95);
+    setPreviewUrl(url);
+    setPhase("preview");
   };
 
-  // ── 3. Run OCR ──────────────────────────────────────────────────────────
+  // ── 3. Retake ────────────────────────────────────────────────────────────
+  const retake = () => {
+    setPreviewUrl("");
+    openCamera();
+  };
+
+  // ── 4. Confirm → OCR ─────────────────────────────────────────────────────
+  const confirmAndScan = () => {
+    setPhase("ocr");
+    runOCR(canvasRef.current);
+  };
+
+  // ── 5. Run OCR ──────────────────────────────────────────────────────────
   const runOCR = async (canvas) => {
     try {
       const { data: { text } } = await Tesseract.recognize(canvas, "eng", {
-        logger: () => {}, // suppress logs
+        logger: () => {},
       });
       const cleaned = text.trim();
       if (!cleaned) {
-        setError("No text found in image. Try better lighting or a clearer photo.");
+        setError("No text found. Try better lighting or a clearer photo.");
         setPhase("idle");
         return;
       }
@@ -66,7 +83,7 @@ export default function BillScanner() {
     }
   };
 
-  // ── 4. Send to GROQ ─────────────────────────────────────────────────────
+  // ── 6. Send to GROQ ─────────────────────────────────────────────────────
   const askGroq = async (rawText) => {
     setPhase("asking");
     const apiKey = process.env.REACT_APP_GROQ_API_KEY;
@@ -75,7 +92,6 @@ export default function BillScanner() {
       setPhase("idle");
       return;
     }
-
     try {
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
@@ -100,14 +116,12 @@ export default function BillScanner() {
           ],
         }),
       });
-
       const data = await response.json();
       if (!response.ok) {
         setError(`GROQ error ${response.status}: ${data.error?.message}`);
         setPhase("idle");
         return;
       }
-
       setGroqResult(data.choices[0].message.content);
       setPhase("done");
     } catch (err) {
@@ -121,6 +135,7 @@ export default function BillScanner() {
     setPhase("idle");
     setOcrText("");
     setGroqResult("");
+    setPreviewUrl("");
     setError("");
   };
 
@@ -149,11 +164,34 @@ export default function BillScanner() {
         </div>
       )}
 
+      {/* PREVIEW */}
+      {phase === "preview" && (
+        <div>
+          <p style={styles.previewLabel}>📸 Preview — does this look clear?</p>
+          <img
+            src={previewUrl}
+            alt="Captured bill"
+            style={styles.previewImg}
+          />
+          <div style={styles.previewBtns}>
+            <button style={styles.btnSecondary} onClick={retake}>
+              🔄 Retake
+            </button>
+            <button style={styles.btnPrimary} onClick={confirmAndScan}>
+              ✅ Looks Good — Scan
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* OCR in progress */}
       {phase === "ocr" && (
         <div style={styles.statusBox}>
           <div style={styles.spinner} />
           <p>Reading bill with OCR...</p>
+          {previewUrl && (
+            <img src={previewUrl} alt="Scanning" style={styles.scanningImg} />
+          )}
         </div>
       )}
 
@@ -174,9 +212,20 @@ export default function BillScanner() {
       {/* DONE */}
       {phase === "done" && (
         <div>
-          <div style={styles.resultBox}>
-            <h3 style={{ marginTop: 0, color: "#1a237e" }}>✅ Bill Summary</h3>
-            <pre style={styles.resultText}>{groqResult}</pre>
+          {/* Side by side: photo + result */}
+          <div style={styles.doneLayout}>
+            <div style={styles.doneLeft}>
+              <p style={styles.doneLabel}>📸 Scanned</p>
+              <img src={previewUrl} alt="Scanned bill" style={styles.doneImg} />
+            </div>
+            <div style={styles.doneRight}>
+              <div style={styles.resultBox}>
+                <h3 style={{ marginTop: 0, color: "#1a237e", fontSize: 15 }}>
+                  ✅ Bill Summary
+                </h3>
+                <pre style={styles.resultText}>{groqResult}</pre>
+              </div>
+            </div>
           </div>
 
           <details style={{ marginTop: 12, fontSize: 12, color: "#888" }}>
@@ -190,7 +239,7 @@ export default function BillScanner() {
         </div>
       )}
 
-      {/* Hidden canvas for capture */}
+      {/* Hidden canvas */}
       <canvas ref={canvasRef} style={{ display: "none" }} />
     </div>
   );
@@ -203,16 +252,9 @@ const styles = {
     padding: "0 20px",
     fontFamily: "sans-serif",
   },
-  title: {
-    fontSize: 24,
-    color: "#1a237e",
-    marginBottom: 4,
-  },
-  subtitle: {
-    color: "#888",
-    fontSize: 14,
-    marginBottom: 24,
-  },
+  title: { fontSize: 24, color: "#1a237e", marginBottom: 4 },
+  subtitle: { color: "#888", fontSize: 14, marginBottom: 24 },
+
   btnPrimary: {
     padding: "14px 28px",
     fontSize: 16,
@@ -224,7 +266,6 @@ const styles = {
     width: "100%",
   },
   btnSecondary: {
-    marginTop: 16,
     padding: "12px 24px",
     fontSize: 15,
     background: "#e8eaf6",
@@ -245,21 +286,38 @@ const styles = {
     cursor: "pointer",
     width: "100%",
   },
-  cameraBox: {
+  cameraBox: { display: "flex", flexDirection: "column" },
+  video: { width: "100%", borderRadius: 10, background: "#000", objectFit: "cover" },
+
+  // Preview
+  previewLabel: {
+    fontWeight: "bold",
+    color: "#333",
+    marginBottom: 10,
+    fontSize: 15,
+  },
+  previewImg: {
+    width: "100%",
+    borderRadius: 10,
+    border: "2px solid #c5cae9",
+    display: "block",
+  },
+  previewBtns: {
     display: "flex",
-    flexDirection: "column",
+    gap: 10,
+    marginTop: 12,
   },
-  video: {
-  width: "100%",
-  borderRadius: 10,
-  background: "#000",
-  objectFit: "cover",
-},
-  statusBox: {
-    textAlign: "center",
-    padding: 30,
-    color: "#555",
+
+  // Scanning
+  scanningImg: {
+    width: "80%",
+    borderRadius: 10,
+    opacity: 0.5,
+    marginTop: 12,
+    filter: "grayscale(60%)",
   },
+
+  statusBox: { textAlign: "center", padding: 30, color: "#555" },
   spinner: {
     width: 40,
     height: 40,
@@ -269,16 +327,32 @@ const styles = {
     animation: "spin 1s linear infinite",
     margin: "0 auto 16px",
   },
+
+  // Done layout
+  doneLayout: {
+    display: "flex",
+    gap: 12,
+    alignItems: "flex-start",
+  },
+  doneLeft: { flex: "0 0 40%" },
+  doneRight: { flex: 1 },
+  doneLabel: { fontSize: 12, color: "#888", margin: "0 0 6px" },
+  doneImg: {
+    width: "100%",
+    borderRadius: 8,
+    border: "1px solid #c5cae9",
+  },
+
   resultBox: {
     background: "#f0f4ff",
     border: "1px solid #c5cae9",
     borderRadius: 10,
-    padding: 16,
+    padding: 12,
   },
   resultText: {
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
-    fontSize: 14,
+    fontSize: 13,
     color: "#333",
     margin: 0,
   },
