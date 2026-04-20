@@ -13,6 +13,7 @@ const tabs = [
   { id: "bill", label: "🧾 Bill" },
   { id: "supabase", label: "🗄️ Database" },
   { id: "voice", label: "🎙️ Voice" },
+  { id: "sensors", label: "📡 Sensors" },
 ];
 
 export default function App() {
