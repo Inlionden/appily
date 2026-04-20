@@ -3,12 +3,15 @@ import MapView from "./MapView";
 import GroqTest from "./GroqTest";
 import BillScanner from "./BillScanner";
 import SupabaseTest from "./SupabaseTest";
+import VoiceInput from "./VoiceInput";
+
 
 const tabs = [
   { id: "map",  label: "🗺️ Map"  },
   { id: "ai",   label: "🤖 AI"   },
   { id: "bill", label: "🧾 Bill" },
   { id: "supabase", label: "🗄️ Database" },
+  { id: "voice", label: "🎙️ Voice" },
 ];
 
 export default function App() {
@@ -52,6 +55,7 @@ export default function App() {
       {active === "ai"   && <GroqTest />}
       {active === "bill" && <BillScanner />}
       {active === "supabase" && <SupabaseTest />}
+      {active === "voice" && <VoiceInput />}
     </div>
   );
 }
