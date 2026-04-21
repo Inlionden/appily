@@ -17,6 +17,10 @@ const LANGUAGES = [
   { label: "English (US)",    code: "en-US" },
 ];
 
+/* ───────── Tunables ───────── */
+const RESTART_DELAY_MS = 250;       // pause before restart
+const RESULT_GRACE_MS  = 400;       // ignore onresult for this long after restart (prevents audio-buffer replay)
+
 export default function VoiceInput({ onResult }) {
   const [selectedLang, setSelectedLang]           = useState("en-IN");
   const [status, setStatus]                       = useState("idle"); // idle | recording | done | error | unsupported
@@ -25,13 +29,14 @@ export default function VoiceInput({ onResult }) {
   const [errorMsg, setErrorMsg]                   = useState("");
   const [copied, setCopied]                       = useState(false);
 
-  const recognitionRef    = useRef(null);
-  const committedRef      = useRef("");   // text committed from PAST recognition sessions
-  const currentFinalRef   = useRef("");   // final text in the CURRENT session
-  const userStoppedRef    = useRef(false); // did user explicitly press Stop?
-  const selectedLangRef   = useRef("en-IN"); // so restart picks up language changes
+  const recognitionRef         = useRef(null);
+  const committedRef           = useRef("");    // text committed from PAST sessions
+  const currentSessionRef      = useRef("");    // final text in CURRENT session
+  const userStoppedRef         = useRef(false); // did user press Stop?
+  const selectedLangRef        = useRef("en-IN");
+  const ignoreResultsUntilRef  = useRef(0);     // timestamp — ignore onresult before this (grace period)
 
-  /* ───────── Check browser support on mount ───────── */
+  /* ───────── Browser support check ───────── */
   useEffect(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) setStatus("unsupported");
@@ -47,12 +52,32 @@ export default function VoiceInput({ onResult }) {
     return () => {
       userStoppedRef.current = true;
       if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch {}
+        try { recognitionRef.current.stop();  } catch {}
+        try { recognitionRef.current.abort(); } catch {}
       }
     };
   }, []);
 
-  /* ───────── Create and wire up a recognition instance ───────── */
+  /* ───────── Commit the current session's text into accumulated total (with dedup) ───────── */
+  const commitSession = () => {
+    const sessionText = currentSessionRef.current;
+    if (!sessionText) return;
+
+    const committed = committedRef.current;
+
+    // DEDUP: if the session text is already at the end of committed, skip it
+    // (this catches audio-buffer replays on mobile)
+    const trimmedSession = sessionText.trim();
+    const trimmedCommitted = committed.trim();
+    if (trimmedSession && trimmedCommitted.endsWith(trimmedSession)) {
+      // duplicate — skip
+    } else {
+      committedRef.current = committed + sessionText;
+    }
+    currentSessionRef.current = "";
+  };
+
+  /* ───────── Create a fresh recognition instance ───────── */
   const createRecognition = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SR();
@@ -60,13 +85,12 @@ export default function VoiceInput({ onResult }) {
     recognition.interimResults = true;
     recognition.lang           = selectedLangRef.current;
 
-    recognition.onstart = () => {
-      setStatus("recording");
-    };
+    recognition.onstart = () => setStatus("recording");
 
-    // KEY FIX #1: Rebuild transcript from all results each event.
-    // This prevents duplication when mobile Chrome re-sends finalized results.
     recognition.onresult = (event) => {
+      // Grace period: ignore results right after a restart (mobile audio-buffer replay)
+      if (Date.now() < ignoreResultsUntilRef.current) return;
+
       let sessionFinal = "";
       let interim = "";
       for (let i = 0; i < event.results.length; i++) {
@@ -77,7 +101,8 @@ export default function VoiceInput({ onResult }) {
           interim += text;
         }
       }
-      currentFinalRef.current = sessionFinal;
+      currentSessionRef.current = sessionFinal;
+
       const full = committedRef.current + sessionFinal;
       setFinalTranscript(full);
       setInterimTranscript(interim);
@@ -85,32 +110,24 @@ export default function VoiceInput({ onResult }) {
 
     recognition.onerror = (e) => {
       if (e.error === "not-allowed") {
-        userStoppedRef.current = true; // prevent auto-restart
+        userStoppedRef.current = true;
         setErrorMsg("Microphone access denied. Please allow mic permission.");
         setStatus("error");
-      } else if (e.error === "no-speech") {
-        // Transient — keep session alive, don't surface as hard error
-      } else if (e.error === "aborted") {
-        // Normal when we call stop — ignore
       } else if (e.error === "network") {
         userStoppedRef.current = true;
         setErrorMsg("Network error. Speech recognition needs internet.");
         setStatus("error");
-      } else {
-        console.warn("Speech recognition error:", e.error);
       }
+      // "no-speech" and "aborted" are normal — ignore
     };
 
-    // KEY FIX #2: Auto-restart on mobile when session ends unexpectedly.
-    // Mobile browsers ignore `continuous: true` and end the session after short pauses.
     recognition.onend = () => {
-      // Commit whatever got finalized in this session into permanent text
-      committedRef.current = committedRef.current + currentFinalRef.current;
-      currentFinalRef.current = "";
+      // Commit this session's text (dedup check inside)
+      commitSession();
+      setFinalTranscript(committedRef.current);
       setInterimTranscript("");
 
       if (userStoppedRef.current) {
-        // User explicitly stopped → wrap up
         const fullText = committedRef.current.trim();
         if (fullText) {
           setStatus("done");
@@ -119,24 +136,27 @@ export default function VoiceInput({ onResult }) {
           setStatus("idle");
         }
       } else {
-        // Session ended on its own (mobile timeout) → restart silently.
-        // Small delay prevents "recognition already started" errors on some devices.
+        // Session ended on its own (mobile timeout) → restart with fresh instance + grace period
         setTimeout(() => {
-          if (!userStoppedRef.current && recognitionRef.current) {
-            try {
-              recognitionRef.current.start();
-            } catch (err) {
-              // If restart fails, wrap up with whatever we have
-              const txt = committedRef.current.trim();
-              if (txt) {
-                setStatus("done");
-                if (onResult) onResult({ transcript: txt, lang: selectedLangRef.current });
-              } else {
-                setStatus("idle");
-              }
+          if (userStoppedRef.current) return;
+
+          const fresh = createRecognition();
+          recognitionRef.current = fresh;
+          ignoreResultsUntilRef.current = Date.now() + RESULT_GRACE_MS;
+
+          try {
+            fresh.start();
+          } catch (err) {
+            // Restart failed → wrap up with what we have
+            const txt = committedRef.current.trim();
+            if (txt) {
+              setStatus("done");
+              if (onResult) onResult({ transcript: txt, lang: selectedLangRef.current });
+            } else {
+              setStatus("idle");
             }
           }
-        }, 100);
+        }, RESTART_DELAY_MS);
       }
     };
 
@@ -151,15 +171,15 @@ export default function VoiceInput({ onResult }) {
       return;
     }
 
-    // Guard against double-start
-    if (status === "recording") return;
+    if (status === "recording") return; // guard against double-start
 
-    // Reset everything for a fresh session
+    // Fresh state
     setFinalTranscript("");
     setInterimTranscript("");
     committedRef.current = "";
-    currentFinalRef.current = "";
+    currentSessionRef.current = "";
     userStoppedRef.current = false;
+    ignoreResultsUntilRef.current = 0;
     setErrorMsg("");
 
     const recognition = createRecognition();
@@ -168,14 +188,14 @@ export default function VoiceInput({ onResult }) {
     try {
       recognition.start();
     } catch (err) {
-      setErrorMsg("Could not start recognition. Try again.");
+      setErrorMsg("Could not start. Try again.");
       setStatus("error");
     }
   };
 
   /* ───────── Stop ───────── */
   const stopRecording = () => {
-    userStoppedRef.current = true; // tell onend NOT to auto-restart
+    userStoppedRef.current = true;
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch {}
     }
@@ -185,12 +205,13 @@ export default function VoiceInput({ onResult }) {
   const reset = () => {
     userStoppedRef.current = true;
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch {}
+      try { recognitionRef.current.stop();  } catch {}
+      try { recognitionRef.current.abort(); } catch {}
     }
     setFinalTranscript("");
     setInterimTranscript("");
     committedRef.current = "";
-    currentFinalRef.current = "";
+    currentSessionRef.current = "";
     setErrorMsg("");
     setStatus("idle");
   };
@@ -215,8 +236,7 @@ export default function VoiceInput({ onResult }) {
         <h2 style={styles.title}>🎙️ Voice Input</h2>
         <div style={styles.error}>
           ❌ Your browser does not support the Web Speech API.
-          <br />
-          <br />
+          <br /><br />
           Please use <strong>Google Chrome</strong> (desktop or Android) for best results.
         </div>
       </div>
@@ -243,14 +263,14 @@ export default function VoiceInput({ onResult }) {
         </select>
       </div>
 
-      {/* ── IDLE ── */}
+      {/* IDLE */}
       {status === "idle" && (
         <button style={styles.micBtn} onClick={startRecording}>
           🎙️ Start Speaking
         </button>
       )}
 
-      {/* ── RECORDING ── */}
+      {/* RECORDING */}
       {status === "recording" && (
         <div>
           <div style={styles.listeningBox}>
@@ -264,16 +284,12 @@ export default function VoiceInput({ onResult }) {
             <p style={styles.transcriptLabel}>Live transcript:</p>
             <p style={styles.transcriptText}>
               {finalTranscript}
-              {interimTranscript && (
-                <span style={styles.interim}>{interimTranscript}</span>
-              )}
+              {interimTranscript && <span style={styles.interim}>{interimTranscript}</span>}
               {!finalTranscript && !interimTranscript && (
                 <span style={styles.placeholder}>Start speaking…</span>
               )}
             </p>
-            {wordCount > 0 && (
-              <p style={styles.wordCount}>{wordCount} words</p>
-            )}
+            {wordCount > 0 && <p style={styles.wordCount}>{wordCount} words</p>}
           </div>
 
           {errorMsg && <div style={styles.warning}>⚠️ {errorMsg}</div>}
@@ -284,7 +300,7 @@ export default function VoiceInput({ onResult }) {
         </div>
       )}
 
-      {/* ── ERROR ── */}
+      {/* ERROR */}
       {status === "error" && (
         <div>
           <div style={styles.error}>❌ {errorMsg}</div>
@@ -294,14 +310,12 @@ export default function VoiceInput({ onResult }) {
         </div>
       )}
 
-      {/* ── DONE ── */}
+      {/* DONE */}
       {status === "done" && (
         <div>
           <div style={styles.resultBox}>
             <div style={styles.resultHeader}>
-              <span style={styles.resultLabel}>
-                Transcript ({selectedLangLabel})
-              </span>
+              <span style={styles.resultLabel}>Transcript ({selectedLangLabel})</span>
               <button style={styles.copyBtn} onClick={copyToClipboard}>
                 {copied ? "✓ Copied" : "📋 Copy"}
               </button>
@@ -319,12 +333,10 @@ export default function VoiceInput({ onResult }) {
         </div>
       )}
 
-      {/* Tip */}
       <div style={styles.tip}>
         💡 Tip: Works best in Google Chrome. Uses 100% free browser speech recognition — no API keys needed.
       </div>
 
-      {/* Keyframes for pulse animation */}
       <style>{`
         @keyframes vi-pulse {
           0%, 100% { opacity: 1; transform: scale(1); }
