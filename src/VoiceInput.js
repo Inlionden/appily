@@ -1,188 +1,189 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
-// ── Constants ─────────────────────────────────────────────────────────────
-const GROQ_API_KEY = process.env.REACT_APP_GROQ_API_KEY;
+/* ───────── Languages (BCP-47 codes for Web Speech API) ───────── */
+const LANGUAGES = [
+  { label: "English (India)", code: "en-IN" },
+  { label: "Hindi",           code: "hi-IN" },
+  { label: "Telugu",          code: "te-IN" },
+  { label: "Tamil",           code: "ta-IN" },
+  { label: "Kannada",         code: "kn-IN" },
+  { label: "Malayalam",       code: "ml-IN" },
+  { label: "Marathi",         code: "mr-IN" },
+  { label: "Bengali",         code: "bn-IN" },
+  { label: "Gujarati",        code: "gu-IN" },
+  { label: "Punjabi",         code: "pa-IN" },
+  { label: "Urdu",            code: "ur-IN" },
+  { label: "Odia",            code: "or-IN" },
+  { label: "English (US)",    code: "en-US" },
+];
 
 export default function VoiceInput({ onResult }) {
-  const [status, setStatus]         = useState("idle");   // idle | recording | transcribing | thinking | done | error
-  const [transcript, setTranscript] = useState("");
-  const [groqResult, setGroqResult] = useState("");
-  const [errorMsg, setErrorMsg]     = useState("");
-  const [audioURL, setAudioURL]     = useState(null);
+  const [selectedLang, setSelectedLang]     = useState("en-IN");
+  const [status, setStatus]                 = useState("idle"); // idle | recording | done | error | unsupported
+  const [finalTranscript, setFinalTranscript] = useState("");
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const [errorMsg, setErrorMsg]             = useState("");
+  const [copied, setCopied]                 = useState(false);
 
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef   = useRef([]);
+  const recognitionRef = useRef(null);
+  const finalRef       = useRef(""); // stable ref for async onresult handler
 
-  // ── Start Recording ───────────────────────────────────────────────────────
-  const startRecording = async () => {
-    setTranscript("");
-    setGroqResult("");
-    setErrorMsg("");
-    setAudioURL(null);
+  /* ───────── Check browser support on mount ───────── */
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) setStatus("unsupported");
+  }, []);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  /* ───────── Keep finalRef synced with state ───────── */
+  useEffect(() => {
+    finalRef.current = finalTranscript;
+  }, [finalTranscript]);
 
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : "audio/ogg";
+  /* ───────── Cleanup on unmount ───────── */
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+      }
+    };
+  }, []);
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current   = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        const url       = URL.createObjectURL(audioBlob);
-        setAudioURL(url);
-        await transcribeWithWhisper(audioBlob);
-      };
-
-      mediaRecorder.start(250);
-      setStatus("recording");
-
-    } catch (err) {
-      setErrorMsg("Microphone access denied. Please allow mic permission and try again.");
-      setStatus("error");
-    }
-  };
-
-  // ── Stop Recording ────────────────────────────────────────────────────────
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      setStatus("transcribing");
-      mediaRecorderRef.current.stop();
-    }
-  };
-
-  // ── Whisper Transcription ─────────────────────────────────────────────────
-  const transcribeWithWhisper = async (audioBlob) => {
-    if (!GROQ_API_KEY) {
-      setErrorMsg("GROQ API key missing. Add REACT_APP_GROQ_API_KEY to your .env file.");
-      setStatus("error");
+  /* ───────── Start listening ───────── */
+  const startRecording = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setStatus("unsupported");
       return;
     }
 
-    try {
-      const formData = new FormData();
-      formData.append("file", audioBlob, "recording.webm");
-      formData.append("model", "whisper-large-v3-turbo");
-      formData.append("response_format", "json");
-      // No language hint → Whisper auto-detects language
-
-      const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          // Do NOT set Content-Type — browser sets it with boundary automatically
-        },
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setErrorMsg(data?.error?.message || "Whisper transcription failed.");
-        setStatus("error");
-        return;
-      }
-
-      const text = data.text?.trim();
-      if (!text) {
-        setErrorMsg("No speech detected. Please try speaking again.");
-        setStatus("error");
-        return;
-      }
-
-      setTranscript(text);
-      setStatus("thinking");
-      await askGroq(text);
-
-    } catch (err) {
-      setErrorMsg("Transcription failed. Check your internet connection.");
-      setStatus("error");
-    }
-  };
-
-  // ── Groq Chat ─────────────────────────────────────────────────────────────
-  const askGroq = async (text) => {
-    try {
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are a smart family assistant. The user will speak a message in any language. " +
-                "Understand the intent and do one of these:\n" +
-                "- If it's a shopping list: extract items, group by category, format neatly.\n" +
-                "- If it's a reminder: extract the task and time clearly.\n" +
-                "- If it's a general task: summarise it clearly.\n" +
-                "- If it's a bill or financial item: summarise amounts and details.\n" +
-                "Always respond in English regardless of input language. " +
-                "Start your reply with one of: [SHOPPING], [REMINDER], [TASK], or [BILL] " +
-                "so the app knows how to route it.",
-            },
-            { role: "user", content: text },
-          ],
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        setErrorMsg(data?.error?.message || "Groq chat failed.");
-        setStatus("error");
-        return;
-      }
-
-      const result = data.choices[0].message.content;
-      setGroqResult(result);
-      setStatus("done");
-
-      if (onResult) onResult({ transcript: text, result });
-
-    } catch {
-      setErrorMsg("AI processing failed. Check your internet connection.");
-      setStatus("error");
-    }
-  };
-
-  // ── Reset ─────────────────────────────────────────────────────────────────
-  const reset = () => {
-    setTranscript("");
-    setGroqResult("");
+    // Reset previous session
+    setFinalTranscript("");
+    setInterimTranscript("");
+    finalRef.current = "";
     setErrorMsg("");
-    setAudioURL(null);
+
+    const recognition = new SR();
+    recognition.continuous     = true;
+    recognition.interimResults = true;
+    recognition.lang           = selectedLang;
+
+    recognition.onstart = () => setStatus("recording");
+
+    recognition.onresult = (event) => {
+      let interim = "";
+      let newFinal = finalRef.current;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const text = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          newFinal += text + " ";
+        } else {
+          interim += text;
+        }
+      }
+      finalRef.current = newFinal;
+      setFinalTranscript(newFinal);
+      setInterimTranscript(interim);
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error === "not-allowed") {
+        setErrorMsg("Microphone access denied. Please allow mic permission.");
+        setStatus("error");
+      } else if (e.error === "no-speech") {
+        // keep recording, just notify the user
+        setErrorMsg("No speech detected yet — keep speaking…");
+      } else if (e.error !== "aborted") {
+        setErrorMsg("Error: " + e.error);
+        setStatus("error");
+      }
+    };
+
+    recognition.onend = () => {
+      setInterimTranscript("");
+      const text = finalRef.current.trim();
+      if (text) {
+        setStatus("done");
+        if (onResult) onResult({ transcript: text, lang: selectedLang });
+      } else if (status !== "error") {
+        setStatus("idle");
+      }
+    };
+
+    try {
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (err) {
+      setErrorMsg("Could not start recognition. Try again.");
+      setStatus("error");
+    }
+  };
+
+  /* ───────── Stop listening ───────── */
+  const stopRecording = () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+    }
+  };
+
+  /* ───────── Reset ───────── */
+  const reset = () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+    }
+    setFinalTranscript("");
+    setInterimTranscript("");
+    finalRef.current = "";
+    setErrorMsg("");
     setStatus("idle");
   };
 
-  // ── Route badge ───────────────────────────────────────────────────────────
-  const getTag = () => {
-    if (groqResult.startsWith("[SHOPPING]")) return { label: "🛒 Shopping list", color: "#1D9E75" };
-    if (groqResult.startsWith("[REMINDER]")) return { label: "⏰ Reminder",      color: "#EF9F27" };
-    if (groqResult.startsWith("[TASK]"))     return { label: "📌 Task",          color: "#7F77DD" };
-    if (groqResult.startsWith("[BILL]"))     return { label: "🧾 Bill",          color: "#D85A30" };
-    return null;
+  /* ───────── Copy to clipboard ───────── */
+  const copyToClipboard = () => {
+    const text = finalTranscript.trim();
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
-  const tag = getTag();
+
+  const wordCount = finalTranscript.trim().split(/\s+/).filter(Boolean).length;
+  const selectedLangLabel = LANGUAGES.find((l) => l.code === selectedLang)?.label;
+
+  /* ───────── Unsupported browser screen ───────── */
+  if (status === "unsupported") {
+    return (
+      <div style={styles.container}>
+        <h2 style={styles.title}>🎙️ Voice Input</h2>
+        <div style={styles.error}>
+          ❌ Your browser does not support the Web Speech API.
+          <br />
+          <br />
+          Please use <strong>Google Chrome</strong> (desktop or Android) for best results.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>🎙️ Voice Input</h2>
-      <p style={styles.subtitle}>Speak in any language — AI auto-detects &amp; understands</p>
+      <p style={styles.subtitle}>Pick your language — see text appear as you speak</p>
+
+      {/* Language selector */}
+      <div style={styles.langRow}>
+        <label style={styles.langLabel}>Language</label>
+        <select
+          value={selectedLang}
+          onChange={(e) => setSelectedLang(e.target.value)}
+          style={styles.select}
+          disabled={status === "recording"}
+        >
+          {LANGUAGES.map((l) => (
+            <option key={l.code} value={l.code}>{l.label}</option>
+          ))}
+        </select>
+      </div>
 
       {/* ── IDLE ── */}
       {status === "idle" && (
@@ -196,43 +197,39 @@ export default function VoiceInput({ onResult }) {
         <div>
           <div style={styles.listeningBox}>
             <div style={styles.pulse} />
-            <span style={{ color: "#c62828", fontWeight: "bold" }}>
-              Recording… speak now
+            <span style={styles.listeningText}>
+              Listening… speak now in {selectedLangLabel}
             </span>
           </div>
-          <p style={styles.hint}>Hindi, Telugu, English, or any language — just speak!</p>
+
+          <div style={styles.liveBox}>
+            <p style={styles.transcriptLabel}>Live transcript:</p>
+            <p style={styles.transcriptText}>
+              {finalTranscript}
+              {interimTranscript && (
+                <span style={styles.interim}>{interimTranscript}</span>
+              )}
+              {!finalTranscript && !interimTranscript && (
+                <span style={styles.placeholder}>Start speaking…</span>
+              )}
+            </p>
+            {wordCount > 0 && (
+              <p style={styles.wordCount}>{wordCount} words</p>
+            )}
+          </div>
+
+          {errorMsg && <div style={styles.warning}>⚠️ {errorMsg}</div>}
+
           <button style={styles.stopBtn} onClick={stopRecording}>
-            ⏹ Stop &amp; Process
+            ⏹ Stop Listening
           </button>
-        </div>
-      )}
-
-      {/* ── TRANSCRIBING ── */}
-      {status === "transcribing" && (
-        <div style={styles.statusBox}>
-          <div style={styles.spinner} />
-          <p>Transcribing your audio…</p>
-        </div>
-      )}
-
-      {/* ── THINKING ── */}
-      {status === "thinking" && (
-        <div style={styles.statusBox}>
-          <div style={styles.spinner} />
-          <p>AI is understanding…</p>
-          {transcript && (
-            <div style={styles.transcriptBox}>
-              <p style={styles.transcriptLabel}>You said:</p>
-              <p style={styles.transcriptText}>{transcript}</p>
-            </div>
-          )}
         </div>
       )}
 
       {/* ── ERROR ── */}
       {status === "error" && (
-        <div style={styles.error}>
-          ❌ {errorMsg}
+        <div>
+          <div style={styles.error}>❌ {errorMsg}</div>
           <button style={{ ...styles.micBtn, marginTop: 12 }} onClick={reset}>
             Try Again
           </button>
@@ -240,33 +237,20 @@ export default function VoiceInput({ onResult }) {
       )}
 
       {/* ── DONE ── */}
-      {status === "done" && groqResult && (
+      {status === "done" && (
         <div>
-          {tag && (
-            <div style={{ ...styles.tag, background: tag.color }}>
-              {tag.label}
-            </div>
-          )}
-
           <div style={styles.resultBox}>
-            <pre style={styles.resultText}>
-              {groqResult.replace(/^\[.*?\]\s*/, "")}
-            </pre>
+            <div style={styles.resultHeader}>
+              <span style={styles.resultLabel}>
+                Transcript ({selectedLangLabel})
+              </span>
+              <button style={styles.copyBtn} onClick={copyToClipboard}>
+                {copied ? "✓ Copied" : "📋 Copy"}
+              </button>
+            </div>
+            <p style={styles.resultText}>{finalTranscript.trim()}</p>
+            <p style={styles.wordCount}>{wordCount} words</p>
           </div>
-
-          {transcript && (
-            <div style={styles.transcriptBox}>
-              <p style={styles.transcriptLabel}>You said (auto-detected language):</p>
-              <p style={styles.transcriptText}>{transcript}</p>
-            </div>
-          )}
-
-          {audioURL && (
-            <div style={styles.audioBox}>
-              <p style={styles.transcriptLabel}>Your recording:</p>
-              <audio controls src={audioURL} style={{ width: "100%", marginTop: 6 }} />
-            </div>
-          )}
 
           <button style={styles.micBtn} onClick={startRecording}>
             🎙️ Speak Again
@@ -276,28 +260,56 @@ export default function VoiceInput({ onResult }) {
           </button>
         </div>
       )}
+
+      {/* Tip */}
+      <div style={styles.tip}>
+        💡 Tip: Works best in Google Chrome. Uses 100% free browser speech recognition — no API keys needed.
+      </div>
+
+      {/* Keyframes for pulse animation */}
+      <style>{`
+        @keyframes vi-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50%      { opacity: 0.5; transform: scale(1.15); }
+        }
+      `}</style>
     </div>
   );
 }
 
+/* ───────── Inline styles (matches App.js indigo theme) ───────── */
 const styles = {
   container:       { maxWidth: 500, margin: "30px auto", padding: "0 20px", fontFamily: "sans-serif" },
   title:           { fontSize: 24, color: "#1a237e", marginBottom: 4 },
   subtitle:        { color: "#888", fontSize: 14, marginBottom: 24 },
-  hint:            { color: "#aaa", fontSize: 12, textAlign: "center", marginBottom: 12 },
-  micBtn:          { width: "100%", padding: "16px", fontSize: 16, background: "#1a237e", color: "#fff", border: "none", borderRadius: 12, cursor: "pointer", marginBottom: 8 },
-  stopBtn:         { width: "100%", padding: "16px", fontSize: 16, background: "#c62828", color: "#fff", border: "none", borderRadius: 12, cursor: "pointer", marginTop: 12 },
+
+  langRow:         { display: "flex", alignItems: "center", gap: 10, marginBottom: 20 },
+  langLabel:       { fontSize: 14, color: "#555", whiteSpace: "nowrap" },
+  select:          { flex: 1, padding: "10px 12px", fontSize: 14, borderRadius: 8, border: "1px solid #c5cae9", background: "#f8f9ff", cursor: "pointer" },
+
+  micBtn:          { width: "100%", padding: "16px", fontSize: 16, background: "#1a237e", color: "#fff", border: "none", borderRadius: 12, cursor: "pointer", marginBottom: 8, fontWeight: "bold" },
+  stopBtn:         { width: "100%", padding: "16px", fontSize: 16, background: "#c62828", color: "#fff", border: "none", borderRadius: 12, cursor: "pointer", marginTop: 12, fontWeight: "bold" },
   resetBtn:        { width: "100%", padding: "12px", fontSize: 14, background: "#f5f5f5", color: "#555", border: "none", borderRadius: 12, cursor: "pointer", marginTop: 8 },
-  listeningBox:    { display: "flex", alignItems: "center", gap: 12, padding: "16px", background: "#fff3f3", borderRadius: 10, marginBottom: 12 },
-  pulse:           { width: 14, height: 14, background: "#c62828", borderRadius: "50%", animation: "pulse 1s ease-in-out infinite" },
-  transcriptBox:   { background: "#f8f9ff", border: "1px solid #e8eaf6", borderRadius: 10, padding: 12, marginBottom: 12 },
-  transcriptLabel: { fontSize: 11, color: "#999", margin: "0 0 4px" },
-  transcriptText:  { fontSize: 14, color: "#333", margin: 0, lineHeight: 1.6 },
-  statusBox:       { textAlign: "center", padding: 20, color: "#555" },
-  spinner:         { width: 36, height: 36, border: "4px solid #e8eaf6", borderTop: "4px solid #1a237e", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 12px" },
-  tag:             { display: "inline-block", color: "#fff", fontSize: 13, fontWeight: "bold", padding: "5px 14px", borderRadius: 20, marginBottom: 10 },
+
+  listeningBox:    { display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: "#fff3f3", borderRadius: 10, marginBottom: 12, border: "1px solid #ffcdd2" },
+  pulse:           { width: 12, height: 12, background: "#c62828", borderRadius: "50%", animation: "vi-pulse 1.2s ease-in-out infinite", flexShrink: 0 },
+  listeningText:   { color: "#c62828", fontWeight: "bold", fontSize: 14 },
+
+  liveBox:         { background: "#e8f5e9", border: "1px solid #a5d6a7", borderRadius: 10, padding: 14, marginBottom: 12, minHeight: 90 },
+  transcriptLabel: { fontSize: 11, color: "#666", margin: "0 0 6px", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: "bold" },
+  transcriptText:  { fontSize: 15, color: "#1a1a1a", margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  interim:         { color: "#888", fontStyle: "italic" },
+  placeholder:     { color: "#bbb" },
+  wordCount:       { fontSize: 11, color: "#888", margin: "8px 0 0" },
+
   resultBox:       { background: "#f0f4ff", border: "1px solid #c5cae9", borderRadius: 10, padding: 14, marginBottom: 12 },
-  resultText:      { whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 14, color: "#333", margin: 0 },
-  audioBox:        { background: "#f5f5f5", border: "1px solid #e0e0e0", borderRadius: 10, padding: 12, marginBottom: 12 },
+  resultHeader:    { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  resultLabel:     { fontSize: 11, color: "#666", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: "bold" },
+  copyBtn:         { padding: "4px 10px", fontSize: 12, background: "#fff", color: "#1a237e", border: "1px solid #c5cae9", borderRadius: 6, cursor: "pointer", fontWeight: "bold" },
+  resultText:      { whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 15, color: "#1a1a1a", margin: 0, lineHeight: 1.6 },
+
+  warning:         { background: "#fff8e1", border: "1px solid #ffe082", color: "#8d6e00", borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 12 },
   error:           { background: "#ffebee", border: "1px solid #ef9a9a", color: "#c62828", borderRadius: 8, padding: 14, fontSize: 14 },
+
+  tip:             { fontSize: 12, color: "#888", marginTop: 20, padding: "10px 12px", background: "#f8f9ff", borderRadius: 8, borderLeft: "3px solid #1a237e" },
 };
