@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 
 const LANGUAGES = [
@@ -16,27 +16,43 @@ const LANGUAGES = [
   { label: "English (UK)",     code: "en-GB" },
 ];
 
+// ── Device detection ────────────────────────────────────────────────────────
+const isIOS    = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 export default function VoiceInput({ onResult }) {
   const [selectedLang, setSelectedLang] = useState("en-IN");
-  const [status, setStatus]             = useState("idle"); // idle | listening | done | error
+  const [status, setStatus]             = useState("idle"); // idle | listening | thinking | done | error
+
   const [groqResult, setGroqResult]     = useState("");
 
   const {
     transcript,
     resetTranscript,
     browserSupportsSpeechRecognition,
+    listening,
   } = useSpeechRecognition();
 
-  if (!browserSupportsSpeechRecognition) {
+  // ── iOS: show unsupported message immediately ─────────────────────────────
+  if (isIOS || !browserSupportsSpeechRecognition) {
     return (
       <div style={styles.container}>
         <div style={styles.error}>
-          ⚠️ Your browser does not support voice recognition.
-          Please use Chrome on Android or desktop.
+          ⚠️ Voice input is not supported on iOS Safari.<br />
+          Please use <strong>Chrome on Android</strong> or a desktop browser.
         </div>
       </div>
     );
   }
+
+  // ── Auto-process on mobile when mic naturally stops ───────────────────────
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useEffect(() => {
+    if (isMobile && !listening && status === "listening" && transcript.trim()) {
+      stopAndProcess();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listening]);
 
   // ── Start listening ───────────────────────────────────────────────────────
   const startListening = () => {
@@ -44,7 +60,7 @@ export default function VoiceInput({ onResult }) {
     setGroqResult("");
     setStatus("listening");
     SpeechRecognition.startListening({
-      continuous: true,
+      continuous: !isMobile,   // continuous OFF on mobile (auto-stops after silence)
       language: selectedLang,
     });
   };
@@ -108,7 +124,6 @@ export default function VoiceInput({ onResult }) {
       setGroqResult(result);
       setStatus("done");
 
-      // Pass result up to parent if needed
       if (onResult) onResult({ transcript: text, result, lang: selectedLang });
 
     } catch {
@@ -136,7 +151,10 @@ export default function VoiceInput({ onResult }) {
   return (
     <div style={styles.container}>
       <h2 style={styles.title}>🎙️ Voice Input</h2>
-      <p style={styles.subtitle}>Speak in any language — AI will understand</p>
+      <p style={styles.subtitle}>
+        Speak in any language — AI will understand
+        {isMobile && <span style={styles.mobileBadge}> 📱 Mobile mode</span>}
+      </p>
 
       {/* Language selector */}
       <div style={styles.langRow}>
@@ -153,21 +171,23 @@ export default function VoiceInput({ onResult }) {
         </select>
       </div>
 
-      {/* Mic button */}
+      {/* Idle / Done: show start button */}
       {(status === "idle" || status === "done") && (
         <button style={styles.micBtn} onClick={startListening}>
           🎙️ Start Speaking
         </button>
       )}
 
+      {/* Listening state */}
       {status === "listening" && (
         <div>
           <div style={styles.listeningBox}>
             <div style={styles.pulse} />
-            <span style={{ color: "#c62828", fontWeight: "bold" }}>Listening...</span>
+            <span style={{ color: "#c62828", fontWeight: "bold" }}>
+              {isMobile ? "Listening… (speak now, mic stops automatically)" : "Listening…"}
+            </span>
           </div>
 
-          {/* Live transcript */}
           {transcript && (
             <div style={styles.transcriptBox}>
               <p style={styles.transcriptLabel}>Hearing:</p>
@@ -175,16 +195,20 @@ export default function VoiceInput({ onResult }) {
             </div>
           )}
 
-          <button style={styles.stopBtn} onClick={stopAndProcess}>
-            ⏹ Stop &amp; Process
-          </button>
+          {/* On desktop show manual stop button; on mobile it auto-stops */}
+          {!isMobile && (
+            <button style={styles.stopBtn} onClick={stopAndProcess}>
+              ⏹ Stop &amp; Process
+            </button>
+          )}
         </div>
       )}
 
+      {/* Thinking state */}
       {status === "thinking" && (
         <div style={styles.statusBox}>
           <div style={styles.spinner} />
-          <p>AI is understanding...</p>
+          <p>AI is understanding…</p>
           <div style={styles.transcriptBox}>
             <p style={styles.transcriptLabel}>You said:</p>
             <p style={styles.transcriptText}>{transcript}</p>
@@ -192,10 +216,13 @@ export default function VoiceInput({ onResult }) {
         </div>
       )}
 
+      {/* Error state */}
       {status === "error" && (
         <div style={styles.error}>
           ❌ Something went wrong. Check your API key or try again.
-          <button style={{ ...styles.micBtn, marginTop: 12 }} onClick={reset}>Try Again</button>
+          <button style={{ ...styles.micBtn, marginTop: 12 }} onClick={reset}>
+            Try Again
+          </button>
         </div>
       )}
 
@@ -214,14 +241,16 @@ export default function VoiceInput({ onResult }) {
           </div>
 
           <div style={styles.transcriptBox}>
-            <p style={styles.transcriptLabel}>Original ({LANGUAGES.find(l => l.code === selectedLang)?.label}):</p>
+            <p style={styles.transcriptLabel}>
+              Original ({LANGUAGES.find((l) => l.code === selectedLang)?.label}):
+            </p>
             <p style={styles.transcriptText}>{transcript}</p>
           </div>
 
           <button style={styles.micBtn} onClick={startListening}>
             🎙️ Speak Again
           </button>
-          <button style={{ ...styles.resetBtn }} onClick={reset}>
+          <button style={styles.resetBtn} onClick={reset}>
             🗑 Clear
           </button>
         </div>
@@ -234,6 +263,7 @@ const styles = {
   container:       { maxWidth: 500, margin: "30px auto", padding: "0 20px", fontFamily: "sans-serif" },
   title:           { fontSize: 24, color: "#1a237e", marginBottom: 4 },
   subtitle:        { color: "#888", fontSize: 14, marginBottom: 24 },
+  mobileBadge:     { background: "#e8eaf6", color: "#1a237e", borderRadius: 10, padding: "2px 8px", fontSize: 12, marginLeft: 6 },
   langRow:         { display: "flex", alignItems: "center", gap: 10, marginBottom: 20 },
   langLabel:       { fontSize: 14, color: "#555", whiteSpace: "nowrap" },
   select:          { flex: 1, padding: "10px 12px", fontSize: 14, borderRadius: 8, border: "1px solid #c5cae9", background: "#f8f9ff" },
