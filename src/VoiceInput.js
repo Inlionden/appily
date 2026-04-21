@@ -18,15 +18,18 @@ const LANGUAGES = [
 ];
 
 export default function VoiceInput({ onResult }) {
-  const [selectedLang, setSelectedLang]     = useState("en-IN");
-  const [status, setStatus]                 = useState("idle"); // idle | recording | done | error | unsupported
-  const [finalTranscript, setFinalTranscript] = useState("");
+  const [selectedLang, setSelectedLang]           = useState("en-IN");
+  const [status, setStatus]                       = useState("idle"); // idle | recording | done | error | unsupported
+  const [finalTranscript, setFinalTranscript]     = useState("");
   const [interimTranscript, setInterimTranscript] = useState("");
-  const [errorMsg, setErrorMsg]             = useState("");
-  const [copied, setCopied]                 = useState(false);
+  const [errorMsg, setErrorMsg]                   = useState("");
+  const [copied, setCopied]                       = useState(false);
 
-  const recognitionRef = useRef(null);
-  const finalRef       = useRef(""); // stable ref for async onresult handler
+  const recognitionRef    = useRef(null);
+  const committedRef      = useRef("");   // text committed from PAST recognition sessions
+  const currentFinalRef   = useRef("");   // final text in the CURRENT session
+  const userStoppedRef    = useRef(false); // did user explicitly press Stop?
+  const selectedLangRef   = useRef("en-IN"); // so restart picks up language changes
 
   /* ───────── Check browser support on mount ───────── */
   useEffect(() => {
@@ -34,21 +37,113 @@ export default function VoiceInput({ onResult }) {
     if (!SR) setStatus("unsupported");
   }, []);
 
-  /* ───────── Keep finalRef synced with state ───────── */
+  /* ───────── Keep language ref in sync ───────── */
   useEffect(() => {
-    finalRef.current = finalTranscript;
-  }, [finalTranscript]);
+    selectedLangRef.current = selectedLang;
+  }, [selectedLang]);
 
   /* ───────── Cleanup on unmount ───────── */
   useEffect(() => {
     return () => {
+      userStoppedRef.current = true;
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch {}
       }
     };
   }, []);
 
-  /* ───────── Start listening ───────── */
+  /* ───────── Create and wire up a recognition instance ───────── */
+  const createRecognition = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SR();
+    recognition.continuous     = true;
+    recognition.interimResults = true;
+    recognition.lang           = selectedLangRef.current;
+
+    recognition.onstart = () => {
+      setStatus("recording");
+    };
+
+    // KEY FIX #1: Rebuild transcript from all results each event.
+    // This prevents duplication when mobile Chrome re-sends finalized results.
+    recognition.onresult = (event) => {
+      let sessionFinal = "";
+      let interim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const text = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          sessionFinal += text + " ";
+        } else {
+          interim += text;
+        }
+      }
+      currentFinalRef.current = sessionFinal;
+      const full = committedRef.current + sessionFinal;
+      setFinalTranscript(full);
+      setInterimTranscript(interim);
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error === "not-allowed") {
+        userStoppedRef.current = true; // prevent auto-restart
+        setErrorMsg("Microphone access denied. Please allow mic permission.");
+        setStatus("error");
+      } else if (e.error === "no-speech") {
+        // Transient — keep session alive, don't surface as hard error
+      } else if (e.error === "aborted") {
+        // Normal when we call stop — ignore
+      } else if (e.error === "network") {
+        userStoppedRef.current = true;
+        setErrorMsg("Network error. Speech recognition needs internet.");
+        setStatus("error");
+      } else {
+        console.warn("Speech recognition error:", e.error);
+      }
+    };
+
+    // KEY FIX #2: Auto-restart on mobile when session ends unexpectedly.
+    // Mobile browsers ignore `continuous: true` and end the session after short pauses.
+    recognition.onend = () => {
+      // Commit whatever got finalized in this session into permanent text
+      committedRef.current = committedRef.current + currentFinalRef.current;
+      currentFinalRef.current = "";
+      setInterimTranscript("");
+
+      if (userStoppedRef.current) {
+        // User explicitly stopped → wrap up
+        const fullText = committedRef.current.trim();
+        if (fullText) {
+          setStatus("done");
+          if (onResult) onResult({ transcript: fullText, lang: selectedLangRef.current });
+        } else {
+          setStatus("idle");
+        }
+      } else {
+        // Session ended on its own (mobile timeout) → restart silently.
+        // Small delay prevents "recognition already started" errors on some devices.
+        setTimeout(() => {
+          if (!userStoppedRef.current && recognitionRef.current) {
+            try {
+              recognitionRef.current.start();
+            } catch (err) {
+              // If restart fails, wrap up with whatever we have
+              const txt = committedRef.current.trim();
+              if (txt) {
+                setStatus("done");
+                if (onResult) onResult({ transcript: txt, lang: selectedLangRef.current });
+              } else {
+                setStatus("idle");
+              }
+            }
+          }
+        }, 100);
+      }
+    };
+
+    return recognition;
+  };
+
+  /* ───────── Start ───────── */
   const startRecording = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
@@ -56,70 +151,31 @@ export default function VoiceInput({ onResult }) {
       return;
     }
 
-    // Reset previous session
+    // Guard against double-start
+    if (status === "recording") return;
+
+    // Reset everything for a fresh session
     setFinalTranscript("");
     setInterimTranscript("");
-    finalRef.current = "";
+    committedRef.current = "";
+    currentFinalRef.current = "";
+    userStoppedRef.current = false;
     setErrorMsg("");
 
-    const recognition = new SR();
-    recognition.continuous     = true;
-    recognition.interimResults = true;
-    recognition.lang           = selectedLang;
-
-    recognition.onstart = () => setStatus("recording");
-
-    recognition.onresult = (event) => {
-      let interim = "";
-      let newFinal = finalRef.current;
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const text = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          newFinal += text + " ";
-        } else {
-          interim += text;
-        }
-      }
-      finalRef.current = newFinal;
-      setFinalTranscript(newFinal);
-      setInterimTranscript(interim);
-    };
-
-    recognition.onerror = (e) => {
-      if (e.error === "not-allowed") {
-        setErrorMsg("Microphone access denied. Please allow mic permission.");
-        setStatus("error");
-      } else if (e.error === "no-speech") {
-        // keep recording, just notify the user
-        setErrorMsg("No speech detected yet — keep speaking…");
-      } else if (e.error !== "aborted") {
-        setErrorMsg("Error: " + e.error);
-        setStatus("error");
-      }
-    };
-
-    recognition.onend = () => {
-      setInterimTranscript("");
-      const text = finalRef.current.trim();
-      if (text) {
-        setStatus("done");
-        if (onResult) onResult({ transcript: text, lang: selectedLang });
-      } else if (status !== "error") {
-        setStatus("idle");
-      }
-    };
+    const recognition = createRecognition();
+    recognitionRef.current = recognition;
 
     try {
       recognition.start();
-      recognitionRef.current = recognition;
     } catch (err) {
       setErrorMsg("Could not start recognition. Try again.");
       setStatus("error");
     }
   };
 
-  /* ───────── Stop listening ───────── */
+  /* ───────── Stop ───────── */
   const stopRecording = () => {
+    userStoppedRef.current = true; // tell onend NOT to auto-restart
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch {}
     }
@@ -127,17 +183,19 @@ export default function VoiceInput({ onResult }) {
 
   /* ───────── Reset ───────── */
   const reset = () => {
+    userStoppedRef.current = true;
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch {}
     }
     setFinalTranscript("");
     setInterimTranscript("");
-    finalRef.current = "";
+    committedRef.current = "";
+    currentFinalRef.current = "";
     setErrorMsg("");
     setStatus("idle");
   };
 
-  /* ───────── Copy to clipboard ───────── */
+  /* ───────── Copy ───────── */
   const copyToClipboard = () => {
     const text = finalTranscript.trim();
     if (!text) return;
